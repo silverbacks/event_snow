@@ -104,8 +104,8 @@
             // Set severity and description
             setSeverityAndDescription(trapInfo, trapOID);
             
-            // Set assignment group
-            event.assignment_group = 'Storage-FTS';
+            // Set assignment group using eventFieldMappingScript
+            setAssignmentGroup(trapInfo);
             
             // Set additional fields
             setAdditionalFields(trapInfo);
@@ -168,20 +168,55 @@
     }
     
     /**
-     * Set severity and description based on trap information
+     * Set severity and description based on trap information with enhanced readability
      */
     function setSeverityAndDescription(trapInfo, trapOID) {
         // Set severity (1=Critical, 2=Major, 3=Minor, 4=Warning, 5=Info)
         event.severity = trapInfo.severity;
         
-        // Set description with trap OID for reference
-        var description = trapInfo.name + ' (Trap OID: ' + trapOID + ')';
+        // Create a user-friendly description
+        var sourceNode = getSourceNode();
+        var resourceInfo = getResource();
+        
+        // Build readable description
+        var description = '';
+        
+        // Add severity indicator
+        var severityText = getSeverityText(trapInfo.severity).toUpperCase();
+        description += '[' + severityText + '] ';
+        
+        // Add main event description
+        description += trapInfo.name;
+        
+        // Add source system information
+        description += '\n\nSource System: ' + sourceNode;
+        description += '\nResource Type: ' + resourceInfo;
+        
+        // Add category information
+        if (trapInfo.category) {
+            description += '\nCategory: ' + trapInfo.category;
+        }
+        
+        // Add system details if available
+        var varbinds = event.additional_info || '';
+        
+        // Add serial number if available
+        var serialMatch = varbinds.match(new RegExp(netappOIDs.productSerialNum + '\\s*=\\s*([^\\r\\n]+)'));
+        if (serialMatch) {
+            description += '\nSerial Number: ' + serialMatch[1].trim();
+        }
+        
+        // Add ONTAP version if available
+        var versionMatch = varbinds.match(new RegExp(netappOIDs.productVersion + '\\s*=\\s*([^\\r\\n]+)'));
+        if (versionMatch) {
+            description += '\nONTAP Version: ' + versionMatch[1].trim();
+        }
         
         // Add additional trap data if available
-        var varbinds = event.additional_info || '';
         var trapDataMatch = varbinds.match(new RegExp(netappOIDs.productTrapData + '\\s*=\\s*([^\\r\\n]+)'));
         if (trapDataMatch) {
-            description += '\nAdditional Info: ' + trapDataMatch[1].trim();
+            description += '\n\nAdditional Information:';
+            description += '\n   ' + trapDataMatch[1].trim();
         }
         
         // Special handling for maxdir size events
@@ -189,15 +224,21 @@
             description += parseMaxdirEventDetails(varbinds, trapOID);
         }
         
+        // Add technical details at the end
+        description += '\n\nTechnical Details:';
+        description += '\n   Trap OID: ' + trapOID;
+        description += '\n   Event Type: NetApp/OnCommand SNMP Trap';
+        description += '\n   Processed: ' + new Date().toISOString();
+        
         event.description = description;
-        event.short_description = trapInfo.name + ' on ' + getSourceNode();
+        event.short_description = '[' + severityText + '] ' + trapInfo.name + ' - ' + sourceNode;
     }
     
     /**
-     * Parse maxdir size event details from varbinds
+     * Parse maxdir size event details from varbinds with enhanced readability
      */
     function parseMaxdirEventDetails(varbinds, trapOID) {
-        var details = '';
+        var details = '\n\nDirectory Size Event Details:';
         
         // Common patterns for maxdir event varbinds
         var volumePathPattern = /volume[\s=:]+([^\r\n\s]+)/i;
@@ -206,46 +247,68 @@
         var percentagePattern = /(\d+)%/;
         
         try {
-            // Extract volume/directory path
+            // Extract and format volume/directory path
             var volumeMatch = varbinds.match(volumePathPattern);
             if (volumeMatch) {
-                details += '\nVolume/Path: ' + volumeMatch[1];
+                details += '\n   Volume/Path: ' + volumeMatch[1];
             }
             
-            // Extract current file count
+            // Extract and format current file count
             var fileCountMatch = varbinds.match(fileCountPattern);
-            if (fileCountMatch) {
-                details += '\nCurrent Files: ' + fileCountMatch[1];
-            }
-            
-            // Extract limit information
             var limitMatch = varbinds.match(limitPattern);
-            if (limitMatch) {
-                details += '\nMaximum Limit: ' + limitMatch[1];
+            
+            if (fileCountMatch && limitMatch) {
+                var currentFiles = parseInt(fileCountMatch[1]);
+                var maxFiles = parseInt(limitMatch[1]);
+                var percentage = Math.round((currentFiles / maxFiles) * 100);
                 
-                // Calculate percentage if both values available
-                if (fileCountMatch && limitMatch) {
-                    var percentage = Math.round((parseInt(fileCountMatch[1]) / parseInt(limitMatch[1])) * 100);
-                    details += '\nUsage: ' + percentage + '%';
+                details += '\n   Current Files: ' + currentFiles.toLocaleString();
+                details += '\n   Maximum Limit: ' + maxFiles.toLocaleString();
+                details += '\n   Usage: ' + percentage + '% (' + currentFiles.toLocaleString() + ' / ' + maxFiles.toLocaleString() + ')';
+                
+                // Add text indicator
+                if (percentage >= 95) {
+                    details += ' CRITICAL';
+                } else if (percentage >= 85) {
+                    details += ' WARNING';
+                } else if (percentage >= 75) {
+                    details += ' CAUTION';
+                }
+            } else {
+                if (fileCountMatch) {
+                    details += '\n   Current Files: ' + parseInt(fileCountMatch[1]).toLocaleString();
+                }
+                if (limitMatch) {
+                    details += '\n   Maximum Limit: ' + parseInt(limitMatch[1]).toLocaleString();
                 }
             }
             
-            // Extract percentage if directly mentioned
+            // Extract percentage if directly mentioned and not calculated above
             var percentMatch = varbinds.match(percentagePattern);
-            if (percentMatch && !limitMatch) {
-                details += '\nUsage: ' + percentMatch[0];
+            if (percentMatch && !(fileCountMatch && limitMatch)) {
+                details += '\n   Usage: ' + percentMatch[0];
             }
             
-            // Add specific recommendations based on trap type
+            // Add specific recommendations based on trap type with better formatting
+            details += '\n\nRecommended Actions:';
             if (trapOID === '1.3.6.1.4.1.789.0.485') {
-                details += '\nRecommendation: Monitor directory growth and plan restructuring';
+                details += '\n   • Monitor directory growth trends';
+                details += '\n   • Plan for directory restructuring';
+                details += '\n   • Consider implementing file archival policies';
             } else if (trapOID === '1.3.6.1.4.1.789.0.482') {
-                details += '\nAction Required: Critical directory size limit - immediate intervention needed';
+                details += '\n   • IMMEDIATE ACTION REQUIRED';
+                details += '\n   • Directory has reached critical size limit';
+                details += '\n   • Stop file creation processes if possible';
+                details += '\n   • Begin emergency cleanup procedures';
             } else if (trapOID === '1.3.6.1.4.1.789.0.187') {
-                details += '\nAction Required: WAFL directory is full - cannot create new files';
+                details += '\n   • URGENT: WAFL directory is completely full';
+                details += '\n   • No new files can be created in this directory';
+                details += '\n   • Immediate intervention required';
+                details += '\n   • Contact NetApp support if cleanup is not possible';
             }
             
         } catch (error) {
+            details += '\n   WARNING: Error parsing directory details: ' + error.toString();
             gs.log('Error parsing maxdir event details: ' + error.toString(), 'NetApp Maxdir Parser');
         }
         
@@ -290,6 +353,66 @@
             case 2: return 2; // Major -> High
             case 3: return 3; // Minor -> Moderate
             default: return 4; // Warning -> Low
+        }
+    }
+    
+    /**
+     * Set assignment group using eventFieldMappingScript approach
+     * All NetApp and NetApp OnCommand SNMP traps assigned to Storage-FTS
+     */
+    function setAssignmentGroup(trapInfo) {
+        // Use eventFieldMappingScript function for assignment group mapping
+        // Following official ServiceNow event field mapping pattern
+        var success = eventFieldMappingScript(event, event.sys_id, 'NetApp Storage Assignment');
+        
+        if (!success) {
+            // Fallback to Storage-FTS if eventFieldMappingScript fails
+            event.assignment_group = 'Storage-FTS';
+            gs.log('EventFieldMappingScript failed, using fallback assignment group: Storage-FTS', 'NetApp Assignment Fallback');
+        }
+    }
+    
+    /**
+     * ServiceNow Event Field Mapping Script for NetApp Storage Events
+     * All NetApp and NetApp OnCommand traps are assigned to Storage-FTS group
+     * 
+     * Official ServiceNow Event Field Mapping Script Pattern
+     * @param {GlideRecord} eventGr - The event GlideRecord being processed
+     * @param {string} origEventSysId - Original event system ID
+     * @param {string} fieldMappingRuleName - Rule name for logging purposes
+     */
+    function eventFieldMappingScript(eventGr, origEventSysId, fieldMappingRuleName) {
+        // Make any changes to the alert which will be created out of this Event
+        // Note that the Event itself is immutable, and will not be changed in the database.
+        // You can set the values on the eventGr, e.g. eventGr.setValue(...), but don't perform an update with eventGr.update().
+        // To abort the changes in the event record, return false;
+        // Returning a value other than boolean will result in an error
+        
+        try {
+            // Set NetApp Storage-FTS assignment group for all NetApp traps
+            eventGr.setValue('assignment_group', 'Storage-FTS');
+            
+            // Enhanced field mapping for NetApp events
+            var source = eventGr.getValue('source') || eventGr.getValue('node') || 'unknown';
+            
+            // Set additional fields for better categorization
+            if (!eventGr.getValue('u_vendor')) {
+                eventGr.setValue('u_vendor', 'NetApp');
+            }
+            
+            // Ensure consistent event type
+            if (!eventGr.getValue('type')) {
+                eventGr.setValue('type', 'NetApp Storage Alert');
+            }
+            
+            // Log successful assignment
+            gs.log('NetApp/OnCommand event assigned to Storage-FTS group via eventFieldMappingScript: ' + source, 'NetApp Assignment');
+            
+            return true;
+            
+        } catch (e) {
+            gs.error("The script type mapping rule '" + fieldMappingRuleName + "' ran with the error: \n" + e);
+            return false;
         }
     }
     
@@ -386,10 +509,11 @@
      * Add custom formatting for work notes
      */
     function addWorkNotes() {
-        var workNote = 'NetApp SNMP Trap Processed:\n';
+        var workNote = 'NetApp/OnCommand SNMP Trap Processed:\n';
         workNote += '- Source: ' + event.source + '\n';
         workNote += '- Severity: ' + getSeverityText(event.severity) + '\n';
         workNote += '- Category: ' + event.category + '\n';
+        workNote += '- Assignment Group: Storage-FTS (All NetApp traps)\n';
         
         if (event.u_serial_number) {
             workNote += '- Serial Number: ' + event.u_serial_number + '\n';
@@ -416,6 +540,8 @@
         if (event.u_threshold_status) {
             workNote += '- Status: ' + event.u_threshold_status + '\n';
         }
+        
+        workNote += '- Processing: EventFieldMappingScript used for assignment\n';
         
         event.work_notes = workNote;
     }

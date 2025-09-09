@@ -167,27 +167,298 @@
         event.short_description = trapInfo.name + ' on ' + getSourceNode();
     }
     
+    /**
+     * Set assignment group using eventFieldMappingScript and Dynamic CI Grouping
+     */
     function setAssignmentGroup(trapInfo) {
-        switch (trapInfo.category.toLowerCase()) {
+        // First priority: EventFieldMappingScript for standardized assignment
+        var eventMappingSuccess = eventFieldMappingScript(event, event.sys_id, 'Dell PowerStore Assignment');
+        
+        if (!eventMappingSuccess) {
+            // Second priority: Dynamic CI Grouping based on source node
+            var dynamicGroup = getDynamicAssignmentGroup(event.node, trapInfo);
+            
+            if (dynamicGroup) {
+                event.assignment_group = dynamicGroup;
+            } else {
+                // Fallback to component-based assignment if all methods fail
+                switch (trapInfo.category.toLowerCase()) {
+                    case 'storage':
+                    case 'capacity':
+                    case 'replication':
+                    case 'protection':
+                        event.assignment_group = 'Storage-Support';
+                        break;
+                    case 'network':
+                        event.assignment_group = 'Network-Support';
+                        break;
+                    case 'performance':
+                        event.assignment_group = 'Storage-Performance';
+                        break;
+                    case 'security':
+                    case 'management':
+                        event.assignment_group = 'Storage-Management';
+                        break;
+                    default:
+                        event.assignment_group = 'Storage-Support';
+                }
+            }
+        }
+    }
+    
+    /**
+     * ServiceNow Event Field Mapping Script for Dell PowerStore
+     * Official ServiceNow ITOM Event Field Mapping function
+     * 
+     * @param {GlideRecord} eventGr - The event GlideRecord (temporary object)
+     * @param {string} origEventSysId - Original event sys_id
+     * @param {string} fieldMappingRuleName - Name of the field mapping rule
+     * @returns {boolean} - true if successful, false if failed
+     */
+    function eventFieldMappingScript(eventGr, origEventSysId, fieldMappingRuleName) {
+        try {
+            // Make any changes to the alert which will be created out of this Event
+            // Note that the Event itself is immutable, and will not be changed in the database.
+            // You can set the values on the eventGr, e.g. eventGr.setValue(...), but don't perform an update with eventGr.update().
+            // To abort the changes in the event record, return false;
+            // Returning a value other than boolean will result in an error
+            
+            var source = eventGr.getValue('source') || eventGr.getValue('node') || 'unknown';
+            var category = eventGr.getValue('category') || 'Storage';
+            
+            // Dell PowerStore assignment logic based on component type
+            var assignmentGroup = null;
+            switch (category.toLowerCase()) {
+                case 'storage':
+                case 'capacity':
+                case 'replication':
+                case 'protection':
+                    assignmentGroup = 'Storage-Support';
+                    break;
+                case 'network':
+                    assignmentGroup = 'Network-Support';
+                    break;
+                case 'performance':
+                    assignmentGroup = 'Storage-Performance';
+                    break;
+                case 'security':
+                case 'management':
+                    assignmentGroup = 'Storage-Management';
+                    break;
+                default:
+                    assignmentGroup = 'Storage-Support';
+            }
+            
+            if (assignmentGroup) {
+                eventGr.setValue('assignment_group', assignmentGroup);
+            }
+            
+            // Set additional standardized fields for Dell PowerStore events
+            if (!eventGr.getValue('u_vendor')) {
+                eventGr.setValue('u_vendor', 'Dell');
+            }
+            
+            if (!eventGr.getValue('type')) {
+                eventGr.setValue('type', 'Dell PowerStore Storage Alert');
+            }
+            
+            return true;
+        } catch (e) {
+            gs.error("The script type mapping rule '" + fieldMappingRuleName + "' ran with the error: \n" + e);
+            return false;
+        }
+    }
+    
+    /**
+     * Get Dynamic Assignment Group based on CI and component type for PowerStore
+     */
+    function getDynamicAssignmentGroup(nodeName, trapInfo) {
+        try {
+            // Query CMDB to find the PowerStore CI
+            var ciGR = new GlideRecord('cmdb_ci_storage_server');
+            ciGR.addQuery('name', nodeName);
+            ciGR.addOrCondition('fqdn', nodeName);
+            ciGR.addOrCondition('ip_address', nodeName);
+            if (event.u_array_serial) {
+                ciGR.addOrCondition('serial_number', event.u_array_serial);
+            }
+            ciGR.query();
+            
+            if (ciGR.next()) {
+                var ciSysId = ciGR.getValue('sys_id');
+                var ciClass = ciGR.getValue('sys_class_name');
+                
+                // Look for Dynamic CI Grouping rules
+                var groupRule = findStorageCIGroupingRule(ciSysId, ciClass, trapInfo);
+                if (groupRule) {
+                    return groupRule;
+                }
+                
+                // Check for storage-specific assignment groups in relationships
+                var relatedGroup = getStorageCIRelatedAssignmentGroup(ciSysId, trapInfo.category);
+                if (relatedGroup) {
+                    return relatedGroup;
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            gs.log('Error in getDynamicAssignmentGroup: ' + error.toString(), 'PowerStore Dynamic Assignment');
+            return null;
+        }
+    }
+    
+    /**
+     * Find Storage CI Grouping Rule based on CI class and component type
+     */
+    function findStorageCIGroupingRule(ciSysId, ciClass, trapInfo) {
+        // Check for custom storage CI grouping rules table
+        var ruleGR = new GlideRecord('u_storage_ci_grouping_rules');
+        if (ruleGR.isValid()) {
+            ruleGR.addQuery('active', true);
+            ruleGR.addQuery('ci_class', ciClass);
+            ruleGR.addQuery('component_category', trapInfo.category.toLowerCase());
+            ruleGR.addQuery('vendor', 'Dell');
+            ruleGR.addQuery('product', 'PowerStore');
+            ruleGR.orderBy('order');
+            ruleGR.query();
+            
+            if (ruleGR.next()) {
+                return ruleGR.getValue('assignment_group');
+            }
+        }
+        
+        // Check for PowerStore-specific grouping based on array serial
+        if (event.u_array_serial) {
+            var powerstoreGroup = getPowerStoreSerialAssignmentGroup(event.u_array_serial, trapInfo.category);
+            if (powerstoreGroup) {
+                return powerstoreGroup;
+            }
+        }
+        
+        // Check business service relationships for storage arrays
+        return getStorageBusinessServiceAssignmentGroup(ciSysId, trapInfo.category);
+    }
+    
+    /**
+     * Get assignment group based on PowerStore array serial mapping
+     */
+    function getPowerStoreSerialAssignmentGroup(arraySerial, category) {
+        // Check if there's a custom mapping table for PowerStore arrays
+        var arrayGR = new GlideRecord('u_powerstore_array_mapping');
+        if (arrayGR.isValid()) {
+            arrayGR.addQuery('array_serial', arraySerial);
+            arrayGR.addQuery('active', true);
+            arrayGR.query();
+            
+            if (arrayGR.next()) {
+                // Return category-specific group or default group
+                switch (category.toLowerCase()) {
+                    case 'storage':
+                    case 'capacity':
+                    case 'replication':
+                    case 'protection':
+                        return arrayGR.getValue('storage_support_group') || arrayGR.getValue('default_support_group');
+                    case 'network':
+                        return arrayGR.getValue('network_support_group') || arrayGR.getValue('default_support_group');
+                    case 'performance':
+                        return arrayGR.getValue('performance_support_group') || arrayGR.getValue('default_support_group');
+                    case 'management':
+                    case 'security':
+                        return arrayGR.getValue('management_support_group') || arrayGR.getValue('default_support_group');
+                    default:
+                        return arrayGR.getValue('default_support_group');
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from storage CI relationships
+     */
+    function getStorageCIRelatedAssignmentGroup(ciSysId, category) {
+        // Check if storage array is related to business services or applications
+        var relGR = new GlideRecord('cmdb_rel_ci');
+        relGR.addQuery('child', ciSysId);
+        relGR.addQuery('parent.sys_class_name', 'STARTSWITH', 'cmdb_ci_service');
+        relGR.query();
+        
+        while (relGR.next()) {
+            var serviceGR = new GlideRecord('cmdb_ci_service');
+            if (serviceGR.get(relGR.getValue('parent'))) {
+                var assignmentGroup = getStorageServiceAssignmentGroup(serviceGR, category);
+                if (assignmentGroup) {
+                    return assignmentGroup;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from business service based on storage category
+     */
+    function getStorageBusinessServiceAssignmentGroup(ciSysId, category) {
+        // Look for business service mappings specific to storage
+        var bsRelGR = new GlideRecord('cmdb_rel_ci');
+        bsRelGR.addQuery('child', ciSysId);
+        bsRelGR.addQuery('parent.sys_class_name', 'cmdb_ci_service_discovered');
+        bsRelGR.query();
+        
+        while (bsRelGR.next()) {
+            var serviceGR = new GlideRecord('cmdb_ci_service_discovered');
+            if (serviceGR.get(bsRelGR.getValue('parent'))) {
+                var supportGroup = getStorageServiceCategorySupportGroup(serviceGR, category);
+                if (supportGroup) {
+                    return supportGroup;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from service based on storage component category
+     */
+    function getStorageServiceAssignmentGroup(serviceGR, category) {
+        return getStorageServiceCategorySupportGroup(serviceGR, category);
+    }
+    
+    /**
+     * Get category-specific support group from service CI for storage
+     */
+    function getStorageServiceCategorySupportGroup(serviceGR, category) {
+        var supportGroup = null;
+        
+        switch (category.toLowerCase()) {
             case 'storage':
             case 'capacity':
             case 'replication':
             case 'protection':
-                event.assignment_group = 'Storage-Support';
+                supportGroup = serviceGR.getValue('u_storage_support_group');
                 break;
             case 'network':
-                event.assignment_group = 'Network-Support';
+                supportGroup = serviceGR.getValue('u_network_support_group');
                 break;
             case 'performance':
-                event.assignment_group = 'Storage-Performance';
+                supportGroup = serviceGR.getValue('u_performance_support_group');
                 break;
-            case 'security':
             case 'management':
-                event.assignment_group = 'Storage-Management';
+            case 'security':
+                supportGroup = serviceGR.getValue('u_storage_management_support_group');
                 break;
-            default:
-                event.assignment_group = 'Storage-Support';
         }
+        
+        // Fallback to general storage support group
+        if (!supportGroup) {
+            supportGroup = serviceGR.getValue('u_storage_support_group') || serviceGR.getValue('support_group');
+        }
+        
+        return supportGroup;
     }
     
     function setAdditionalFields(trapInfo) {

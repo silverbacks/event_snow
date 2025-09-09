@@ -277,18 +277,34 @@
         var cleanedName = hostname.toString().trim();
         
         // Remove common iLO suffixes (case insensitive)
+        // Order matters - more specific patterns first
         var suffixPatterns = [
+            /-con-ilo$/i,       // hostname-con-ilo
+            /-con-mgmt$/i,      // hostname-con-mgmt
+            /-con-ipmi$/i,      // hostname-con-ipmi
+            /-con-bmc$/i,       // hostname-con-bmc
+            /-con-idrac$/i,     // hostname-con-idrac
+            /-con-oob$/i,       // hostname-con-oob
+            /-con-mgt$/i,       // hostname-con-mgt
+            /-con-drac$/i,      // hostname-con-drac
             /-con$/i,           // hostname-con
+            /r-ilo$/i,          // hostnamer-ilo
+            /r-mgmt$/i,         // hostnamer-mgmt
+            /r-ipmi$/i,         // hostnamer-ipmi
+            /r-bmc$/i,          // hostnamer-bmc
+            /r-idrac$/i,        // hostnamer-idrac
+            /r-oob$/i,          // hostnamer-oob
+            /r-mgt$/i,          // hostnamer-mgt
+            /r-drac$/i,         // hostnamer-drac
             /-ilo$/i,           // hostname-ilo
             /-mgmt$/i,          // hostname-mgmt
             /-ipmi$/i,          // hostname-ipmi
             /-bmc$/i,           // hostname-bmc
             /-idrac$/i,         // hostname-idrac
-            /r$/i,              // hostnamer (single 'r' suffix)
-            /-r$/i,             // hostname-r
             /-oob$/i,           // hostname-oob (out of band)
             /-mgt$/i,           // hostname-mgt (management)
-            /-drac$/i           // hostname-drac
+            /-drac$/i,          // hostname-drac
+            /r$/i               // hostnamer (single 'r' suffix)
         ];
         
         // Apply suffix removal patterns
@@ -410,22 +426,259 @@
     }
     
     /**
-     * Set assignment group based on component type
+     * Set assignment group based on hostname patterns, eventFieldMappingScript, and Dynamic CI Grouping
      */
     function setAssignmentGroup(trapInfo) {
-        switch (trapInfo.category.toLowerCase()) {
+        // First priority: Hostname-based routing
+        var hostnameGroup = getHostnameBasedAssignmentGroup();
+        if (hostnameGroup) {
+            event.assignment_group = hostnameGroup;
+            return;
+        }
+        
+        // Second priority: EventFieldMappingScript for standardized assignment
+        var eventMappingSuccess = eventFieldMappingScript(event, event.sys_id, 'HP iLO Hardware Assignment');
+        
+        if (!eventMappingSuccess) {
+            // Third priority: Dynamic CI Grouping based on source node
+            var dynamicGroup = getDynamicAssignmentGroup(event.node, trapInfo);
+            
+            if (dynamicGroup) {
+                event.assignment_group = dynamicGroup;
+            } else {
+                // Fallback to component-based assignment if all methods fail
+                switch (trapInfo.category.toLowerCase()) {
+                    case 'storage':
+                        event.assignment_group = 'Storage-Support';
+                        break;
+                    case 'network':
+                        event.assignment_group = 'Network-Support';
+                        break;
+                    case 'management':
+                        event.assignment_group = 'Server-Management';
+                        break;
+                    default:
+                        event.assignment_group = 'Hardware-Server-Support';
+                }
+            }
+        }
+    }
+    
+    /**
+     * Get assignment group based on iLO hostname patterns (before cleaning)
+     */
+    function getHostnameBasedAssignmentGroup() {
+        // Get the original hostname before cleaning for pattern matching
+        var originalHostname = getOriginalHostname();
+        if (!originalHostname) {
+            return null;
+        }
+        
+        var hostname = originalHostname.toString().toLowerCase();
+        
+        // Check for -con pattern (UNIX systems)
+        if (hostname.indexOf('-con') >= 0) {
+            gs.log('HP iLO hostname contains -con pattern, routing to UNIX-SUPPORT: ' + originalHostname, 'HP iLO Hostname Routing');
+            return 'UNIX-SUPPORT';
+        }
+        
+        // Check for 'r' pattern (Windows systems)
+        if (hostname.indexOf('r') >= 0) {
+            gs.log('HP iLO hostname contains r pattern, routing to WINDOWS-SERVER-TEAM: ' + originalHostname, 'HP iLO Hostname Routing');
+            return 'WINDOWS-SERVER-TEAM';
+        }
+        
+        // No hostname pattern matched
+        return null;
+    }
+    
+    /**
+     * Get original hostname before cleaning for pattern matching
+     */
+    function getOriginalHostname() {
+        var varbinds = event.additional_info || '';
+        var hostname = null;
+        
+        // Try to get hostname from sysName first (most reliable)
+        var sysNameMatch = varbinds.match(new RegExp(standardOIDs.sysName + '\\s*=\\s*([^\\r\\n]+)'));
+        if (sysNameMatch) {
+            hostname = sysNameMatch[1].trim();
+        }
+        
+        // If no sysName, try HP-specific product name or system ID
+        if (!hostname) {
+            var productNameMatch = varbinds.match(new RegExp(hpOIDs.productName + '\\s*=\\s*([^\\r\\n]+)'));
+            if (productNameMatch) {
+                hostname = productNameMatch[1].trim();
+            }
+        }
+        
+        // If still no hostname, try system ID
+        if (!hostname) {
+            var systemIdMatch = varbinds.match(new RegExp(hpOIDs.systemId + '\\s*=\\s*([^\\r\\n]+)'));
+            if (systemIdMatch) {
+                hostname = systemIdMatch[1].trim();
+            }
+        }
+        
+        // Fallback to event source if available
+        if (!hostname && event.source) {
+            hostname = event.source.toString();
+        }
+        
+        return hostname;
+    }
+    
+    /**
+     * Get Dynamic Assignment Group based on CI and component type
+     */
+    function getDynamicAssignmentGroup(nodeName, trapInfo) {
+        try {
+            // Query CMDB to find the CI for this node
+            var ciGR = new GlideRecord('cmdb_ci');
+            ciGR.addQuery('name', nodeName);
+            ciGR.addOrCondition('fqdn', nodeName);
+            ciGR.addOrCondition('ip_address', nodeName);
+            ciGR.query();
+            
+            if (ciGR.next()) {
+                var ciSysId = ciGR.getValue('sys_id');
+                var ciClass = ciGR.getValue('sys_class_name');
+                
+                // Look for Dynamic CI Grouping rules
+                var groupRule = findCIGroupingRule(ciSysId, ciClass, trapInfo);
+                if (groupRule) {
+                    return groupRule;
+                }
+                
+                // Check for CI-specific assignment groups in relationships
+                var relatedGroup = getCIRelatedAssignmentGroup(ciSysId, trapInfo.category);
+                if (relatedGroup) {
+                    return relatedGroup;
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            gs.log('Error in getDynamicAssignmentGroup: ' + error.toString(), 'HP iLO Dynamic Assignment');
+            return null;
+        }
+    }
+    
+    /**
+     * Find CI Grouping Rule based on CI class and component type
+     */
+    function findCIGroupingRule(ciSysId, ciClass, trapInfo) {
+        // Check for custom CI grouping rules table (if exists)
+        // This would be a custom table: u_ci_grouping_rules
+        var ruleGR = new GlideRecord('u_ci_grouping_rules');
+        if (ruleGR.isValid()) {
+            ruleGR.addQuery('active', true);
+            ruleGR.addQuery('ci_class', ciClass);
+            ruleGR.addQuery('component_category', trapInfo.category.toLowerCase());
+            ruleGR.orderBy('order');
+            ruleGR.query();
+            
+            if (ruleGR.next()) {
+                return ruleGR.getValue('assignment_group');
+            }
+        }
+        
+        // Fallback: Check business service relationships
+        return getBusinessServiceAssignmentGroup(ciSysId, trapInfo.category);
+    }
+    
+    /**
+     * Get assignment group from CI relationships (business services, applications)
+     */
+    function getCIRelatedAssignmentGroup(ciSysId, category) {
+        // Check if CI is related to business services
+        var relGR = new GlideRecord('cmdb_rel_ci');
+        relGR.addQuery('child', ciSysId);
+        relGR.addQuery('parent.sys_class_name', 'STARTSWITH', 'cmdb_ci_service');
+        relGR.query();
+        
+        if (relGR.next()) {
+            var serviceGR = new GlideRecord('cmdb_ci_service');
+            if (serviceGR.get(relGR.getValue('parent'))) {
+                // Check if business service has specific assignment groups
+                var assignmentGroup = getServiceAssignmentGroup(serviceGR, category);
+                if (assignmentGroup) {
+                    return assignmentGroup;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from business service based on category
+     */
+    function getBusinessServiceAssignmentGroup(ciSysId, category) {
+        // Look for business service mappings
+        var bsRelGR = new GlideRecord('cmdb_rel_ci');
+        bsRelGR.addQuery('child', ciSysId);
+        bsRelGR.addQuery('parent.sys_class_name', 'cmdb_ci_service_discovered');
+        bsRelGR.query();
+        
+        while (bsRelGR.next()) {
+            var serviceGR = new GlideRecord('cmdb_ci_service_discovered');
+            if (serviceGR.get(bsRelGR.getValue('parent'))) {
+                // Check service's support groups based on category
+                var supportGroup = null;
+                
+                switch (category.toLowerCase()) {
+                    case 'storage':
+                        supportGroup = serviceGR.getValue('u_storage_support_group') || 
+                                     serviceGR.getValue('support_group');
+                        break;
+                    case 'network':
+                        supportGroup = serviceGR.getValue('u_network_support_group') || 
+                                     serviceGR.getValue('support_group');
+                        break;
+                    case 'management':
+                        supportGroup = serviceGR.getValue('u_management_support_group') || 
+                                     serviceGR.getValue('support_group');
+                        break;
+                    default:
+                        supportGroup = serviceGR.getValue('support_group');
+                }
+                
+                if (supportGroup) {
+                    return supportGroup;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from service based on component category
+     */
+    function getServiceAssignmentGroup(serviceGR, category) {
+        // Check for category-specific support groups in the service CI
+        var supportGroup = null;
+        
+        switch (category.toLowerCase()) {
             case 'storage':
-                event.assignment_group = 'Storage-Support';
+                supportGroup = serviceGR.getValue('u_storage_support_group');
                 break;
             case 'network':
-                event.assignment_group = 'Network-Support';
+                supportGroup = serviceGR.getValue('u_network_support_group');
                 break;
             case 'management':
-                event.assignment_group = 'Server-Management';
+                supportGroup = serviceGR.getValue('u_management_support_group');
                 break;
-            default:
-                event.assignment_group = 'Hardware-Server-Support';
         }
+        
+        // Fallback to general support group
+        if (!supportGroup) {
+            supportGroup = serviceGR.getValue('support_group');
+        }
+        
+        return supportGroup;
     }
     
     /**
@@ -594,6 +847,69 @@
             case 4: return 'Warning';
             case 5: return 'Info';
             default: return 'Unknown';
+        }
+    }
+    
+    /**
+     * ServiceNow Event Field Mapping Script for HP/HPE iLO Hardware Events
+     * Provides standardized event field mapping with component-based routing
+     * 
+     * Official ServiceNow Event Field Mapping Script Pattern
+     * @param {GlideRecord} eventGr - The event GlideRecord being processed
+     * @param {string} origEventSysId - Original event system ID
+     * @param {string} fieldMappingRuleName - Rule name for logging purposes
+     */
+    function eventFieldMappingScript(eventGr, origEventSysId, fieldMappingRuleName) {
+        // Make any changes to the alert which will be created out of this Event
+        // Note that the Event itself is immutable, and will not be changed in the database.
+        // You can set the values on the eventGr, e.g. eventGr.setValue(...), but don't perform an update with eventGr.update().
+        // To abort the changes in the event record, return false;
+        // Returning a value other than boolean will result in an error
+        
+        try {
+            // Enhanced field mapping for HP/HPE iLO events
+            var source = eventGr.getValue('source') || eventGr.getValue('node') || 'unknown';
+            var category = eventGr.getValue('category') || 'Hardware';
+            
+            // Set assignment group based on component category with HP-specific routing
+            var assignmentGroup = null;
+            
+            switch (category.toLowerCase()) {
+                case 'storage':
+                    assignmentGroup = 'Storage-Support';
+                    break;
+                case 'network':
+                    assignmentGroup = 'Network-Support';
+                    break;
+                case 'management':
+                    assignmentGroup = 'Server-Management';
+                    break;
+                default:
+                    assignmentGroup = 'Hardware-Server-Support';
+            }
+            
+            if (assignmentGroup) {
+                eventGr.setValue('assignment_group', assignmentGroup);
+            }
+            
+            // Set additional standardized fields for HP events
+            if (!eventGr.getValue('u_vendor')) {
+                eventGr.setValue('u_vendor', 'HP/HPE');
+            }
+            
+            // Ensure consistent event type
+            if (!eventGr.getValue('type')) {
+                eventGr.setValue('type', 'HP iLO Hardware Alert');
+            }
+            
+            // Log successful assignment
+            gs.log('HP/HPE iLO event processed via eventFieldMappingScript - Source: ' + source + ', Category: ' + category + ', Assignment: ' + assignmentGroup, 'HP iLO Assignment');
+            
+            return true;
+            
+        } catch (e) {
+            gs.error("The script type mapping rule '" + fieldMappingRuleName + "' ran with the error: \n" + e);
+            return false;
         }
     }
     

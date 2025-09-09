@@ -444,22 +444,274 @@
     }
     
     /**
-     * Set assignment group based on component type
+     * Set assignment group using eventFieldMappingScript and Dynamic CI Grouping
      */
     function setAssignmentGroup(trapInfo) {
-        switch (trapInfo.category.toLowerCase()) {
+        // First priority: EventFieldMappingScript for standardized assignment
+        var eventMappingSuccess = eventFieldMappingScript(event, event.sys_id, 'Dell iDRAC Hardware Assignment');
+        
+        if (!eventMappingSuccess) {
+            // Second priority: Dynamic CI Grouping based on source node
+            var dynamicGroup = getDynamicAssignmentGroup(event.node, trapInfo);
+            
+            if (dynamicGroup) {
+                event.assignment_group = dynamicGroup;
+            } else {
+                // Fallback to component-based assignment if all methods fail
+                switch (trapInfo.category.toLowerCase()) {
+                    case 'storage':
+                        event.assignment_group = 'Storage-Support';
+                        break;
+                    case 'network':
+                        event.assignment_group = 'Network-Support';
+                        break;
+                    case 'management':
+                    case 'security':
+                        event.assignment_group = 'Server-Management';
+                        break;
+                    default:
+                        event.assignment_group = 'Hardware-Server-Support';
+                }
+            }
+        }
+    }
+    
+    /**
+     * Get Dynamic Assignment Group based on CI and component type
+     */
+    function getDynamicAssignmentGroup(nodeName, trapInfo) {
+        try {
+            // Query CMDB to find the CI for this node (Dell server)
+            var ciGR = new GlideRecord('cmdb_ci_computer');
+            ciGR.addQuery('name', nodeName);
+            ciGR.addOrCondition('fqdn', nodeName);
+            ciGR.addOrCondition('ip_address', nodeName);
+            ciGR.addOrCondition('u_service_tag', event.u_service_tag);
+            ciGR.query();
+            
+            if (ciGR.next()) {
+                var ciSysId = ciGR.getValue('sys_id');
+                var ciClass = ciGR.getValue('sys_class_name');
+                
+                // Look for Dynamic CI Grouping rules
+                var groupRule = findCIGroupingRule(ciSysId, ciClass, trapInfo);
+                if (groupRule) {
+                    return groupRule;
+                }
+                
+                // Check for CI-specific assignment groups in relationships
+                var relatedGroup = getCIRelatedAssignmentGroup(ciSysId, trapInfo.category);
+                if (relatedGroup) {
+                    return relatedGroup;
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            gs.log('Error in getDynamicAssignmentGroup: ' + error.toString(), 'Dell iDRAC Dynamic Assignment');
+            return null;
+        }
+    }
+    
+    /**
+     * Find CI Grouping Rule based on CI class and component type
+     */
+    function findCIGroupingRule(ciSysId, ciClass, trapInfo) {
+        // Check for custom CI grouping rules table (if exists)
+        var ruleGR = new GlideRecord('u_ci_grouping_rules');
+        if (ruleGR.isValid()) {
+            ruleGR.addQuery('active', true);
+            ruleGR.addQuery('ci_class', ciClass);
+            ruleGR.addQuery('component_category', trapInfo.category.toLowerCase());
+            ruleGR.addQuery('vendor', 'Dell');
+            ruleGR.orderBy('order');
+            ruleGR.query();
+            
+            if (ruleGR.next()) {
+                return ruleGR.getValue('assignment_group');
+            }
+        }
+        
+        // Check for Dell-specific grouping based on service tag
+        if (event.u_service_tag) {
+            var dellGroup = getDellServiceTagAssignmentGroup(event.u_service_tag, trapInfo.category);
+            if (dellGroup) {
+                return dellGroup;
+            }
+        }
+        
+        // Fallback: Check business service relationships
+        return getBusinessServiceAssignmentGroup(ciSysId, trapInfo.category);
+    }
+    
+    /**
+     * Get assignment group based on Dell service tag mapping
+     */
+    function getDellServiceTagAssignmentGroup(serviceTag, category) {
+        // Check if there's a custom mapping table for Dell service tags
+        var tagGR = new GlideRecord('u_dell_service_tag_mapping');
+        if (tagGR.isValid()) {
+            tagGR.addQuery('service_tag', serviceTag);
+            tagGR.addQuery('active', true);
+            tagGR.query();
+            
+            if (tagGR.next()) {
+                // Return category-specific group or default group
+                switch (category.toLowerCase()) {
+                    case 'storage':
+                        return tagGR.getValue('storage_support_group') || tagGR.getValue('default_support_group');
+                    case 'network':
+                        return tagGR.getValue('network_support_group') || tagGR.getValue('default_support_group');
+                    case 'management':
+                    case 'security':
+                        return tagGR.getValue('management_support_group') || tagGR.getValue('default_support_group');
+                    default:
+                        return tagGR.getValue('default_support_group');
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from CI relationships (business services, applications)
+     */
+    function getCIRelatedAssignmentGroup(ciSysId, category) {
+        // Check if CI is related to business services
+        var relGR = new GlideRecord('cmdb_rel_ci');
+        relGR.addQuery('child', ciSysId);
+        relGR.addQuery('parent.sys_class_name', 'STARTSWITH', 'cmdb_ci_service');
+        relGR.query();
+        
+        while (relGR.next()) {
+            var serviceGR = new GlideRecord('cmdb_ci_service');
+            if (serviceGR.get(relGR.getValue('parent'))) {
+                // Check if business service has specific assignment groups
+                var assignmentGroup = getServiceAssignmentGroup(serviceGR, category);
+                if (assignmentGroup) {
+                    return assignmentGroup;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from business service based on category
+     */
+    function getBusinessServiceAssignmentGroup(ciSysId, category) {
+        // Look for business service mappings
+        var bsRelGR = new GlideRecord('cmdb_rel_ci');
+        bsRelGR.addQuery('child', ciSysId);
+        bsRelGR.addQuery('parent.sys_class_name', 'cmdb_ci_service_discovered');
+        bsRelGR.query();
+        
+        while (bsRelGR.next()) {
+            var serviceGR = new GlideRecord('cmdb_ci_service_discovered');
+            if (serviceGR.get(bsRelGR.getValue('parent'))) {
+                var supportGroup = getServiceCategorySupportGroup(serviceGR, category);
+                if (supportGroup) {
+                    return supportGroup;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Get assignment group from service based on component category
+     */
+    function getServiceAssignmentGroup(serviceGR, category) {
+        return getServiceCategorySupportGroup(serviceGR, category);
+    }
+    
+    /**
+     * Get category-specific support group from service CI
+     */
+    function getServiceCategorySupportGroup(serviceGR, category) {
+        var supportGroup = null;
+        
+        switch (category.toLowerCase()) {
             case 'storage':
-                event.assignment_group = 'Storage-Support';
+                supportGroup = serviceGR.getValue('u_storage_support_group');
                 break;
             case 'network':
-                event.assignment_group = 'Network-Support';
+                supportGroup = serviceGR.getValue('u_network_support_group');
                 break;
             case 'management':
             case 'security':
-                event.assignment_group = 'Server-Management';
+                supportGroup = serviceGR.getValue('u_management_support_group');
                 break;
-            default:
-                event.assignment_group = 'Hardware-Server-Support';
+            case 'hardware':
+                supportGroup = serviceGR.getValue('u_hardware_support_group');
+                break;
+        }
+        
+        // Fallback to general support group
+        if (!supportGroup) {
+            supportGroup = serviceGR.getValue('support_group');
+        }
+        
+        return supportGroup;
+    }
+    
+    /**
+     * ServiceNow Event Field Mapping Script for Dell iDRAC
+     * Official ServiceNow ITOM Event Field Mapping function
+     * 
+     * @param {GlideRecord} eventGr - The event GlideRecord (temporary object)
+     * @param {string} origEventSysId - Original event sys_id
+     * @param {string} fieldMappingRuleName - Name of the field mapping rule
+     * @returns {boolean} - true if successful, false if failed
+     */
+    function eventFieldMappingScript(eventGr, origEventSysId, fieldMappingRuleName) {
+        try {
+            // Make any changes to the alert which will be created out of this Event
+            // Note that the Event itself is immutable, and will not be changed in the database.
+            // You can set the values on the eventGr, e.g. eventGr.setValue(...), but don't perform an update with eventGr.update().
+            // To abort the changes in the event record, return false;
+            // Returning a value other than boolean will result in an error
+            
+            var source = eventGr.getValue('source') || eventGr.getValue('node') || 'unknown';
+            var category = eventGr.getValue('category') || 'Hardware';
+            
+            // Dell iDRAC assignment logic based on component type
+            var assignmentGroup = null;
+            switch (category.toLowerCase()) {
+                case 'storage':
+                    assignmentGroup = 'Storage-Support';
+                    break;
+                case 'network':
+                    assignmentGroup = 'Network-Support';
+                    break;
+                case 'management':
+                case 'security':
+                    assignmentGroup = 'Server-Management';
+                    break;
+                default:
+                    assignmentGroup = 'Hardware-Server-Support';
+            }
+            
+            if (assignmentGroup) {
+                eventGr.setValue('assignment_group', assignmentGroup);
+            }
+            
+            // Set additional standardized fields for Dell iDRAC events
+            if (!eventGr.getValue('u_vendor')) {
+                eventGr.setValue('u_vendor', 'Dell');
+            }
+            
+            if (!eventGr.getValue('type')) {
+                eventGr.setValue('type', 'Dell iDRAC Hardware Alert');
+            }
+            
+            return true;
+        } catch (e) {
+            gs.error("The script type mapping rule '" + fieldMappingRuleName + "' ran with the error: \n" + e);
+            return false;
         }
     }
     
