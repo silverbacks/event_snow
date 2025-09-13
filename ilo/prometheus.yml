@@ -1,0 +1,71 @@
+# Prometheus Configuration for iLO Hardware Monitoring
+# Add this job to your existing prometheus.yml
+
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+
+# Rule files for alerting
+rule_files:
+  - "ilo_alerting_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # iLO Hardware Monitoring via Telegraf
+  - job_name: 'ilo-hardware-monitoring'
+    static_configs:
+      - targets: ['localhost:9273']  # Telegraf Prometheus endpoint
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    metrics_path: /metrics
+    
+    # Optional: Add additional labels
+    labels:
+      service: 'hardware-monitoring'
+      monitoring_type: 'ilo'
+    
+    # Metric relabeling (optional)
+    metric_relabel_configs:
+      # Keep only iLO-related metrics and system context
+      - source_labels: [__name__]
+        regex: '(ilo_.*|system_.*|cpu_.*|mem_.*|disk_.*)'
+        action: keep
+      
+      # Rename some metrics for clarity
+      - source_labels: [__name__]
+        regex: 'ilo_temp(.*)'
+        target_label: __name__
+        replacement: 'ilo_temperature${1}'
+      
+      # Add severity label based on metric values
+      - source_labels: [health_code]
+        regex: '3'
+        target_label: severity
+        replacement: 'critical'
+      - source_labels: [health_code]
+        regex: '2'
+        target_label: severity
+        replacement: 'warning'
+      - source_labels: [health_code]
+        regex: '1'
+        target_label: severity
+        replacement: 'normal'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Example: Additional scrape job for multiple servers
+# - job_name: 'ilo-hardware-fleet'
+#   static_configs:
+#     - targets: 
+#       - 'server1:9273'
+#       - 'server2:9273'
+#       - 'server3:9273'
+#   scrape_interval: 60s
+#   labels:
+#     service: 'hardware-monitoring'
+#     fleet: 'production'

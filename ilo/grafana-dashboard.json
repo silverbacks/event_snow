@@ -1,0 +1,185 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "HP iLO Hardware Monitor",
+    "description": "Hardware monitoring dashboard for HP iLO4/iLO5 servers",
+    "tags": ["ilo", "hardware", "monitoring"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "System Health Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ilo_system_health_health_numeric",
+            "legendFormat": "{{host}} - Health"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 1},
+                {"color": "green", "value": 2}
+              ]
+            },
+            "mappings": [
+              {"value": 0, "text": "Unknown"},
+              {"value": 1, "text": "OK"},
+              {"value": 2, "text": "Warning"},
+              {"value": 3, "text": "Critical"}
+            ]
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Temperature Sensors",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "ilo_temperature_*",
+            "legendFormat": "{{host}} - {{__field__}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Temperature (°C)",
+            "min": 0,
+            "max": 100
+          }
+        ],
+        "thresholds": [
+          {"value": 75, "colorMode": "critical", "op": "gt"},
+          {"value": 85, "colorMode": "critical", "op": "gt"}
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Fan Speeds",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "ilo_fan_*_speed_percent",
+            "legendFormat": "{{host}} - {{__field__}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Speed (%)",
+            "min": 0,
+            "max": 100
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Power Consumption",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "ilo_power_consumption_current_watts",
+            "legendFormat": "{{host}} - Current Power"
+          },
+          {
+            "expr": "ilo_power_consumption_average_watts",
+            "legendFormat": "{{host}} - Average Power"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Power (Watts)",
+            "min": 0
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Power Supply Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ilo_power_supply_*_status_numeric",
+            "format": "table"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {},
+              "renameByName": {
+                "Value": "Status",
+                "host": "Host",
+                "__field__": "Power Supply"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Status"},
+              "properties": [
+                {
+                  "id": "custom.cellOptions",
+                  "value": {
+                    "type": "color-background"
+                  }
+                },
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "steps": [
+                      {"color": "red", "value": 0},
+                      {"color": "green", "value": 1},
+                      {"color": "yellow", "value": 2},
+                      {"color": "red", "value": 3}
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Memory Module Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ilo_memory_*_status_numeric",
+            "format": "table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+      },
+      {
+        "id": 7,
+        "title": "Storage Drive Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ilo_drive_*_status_numeric",
+            "format": "table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+      }
+    ]
+  }
+}

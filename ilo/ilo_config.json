@@ -1,0 +1,107 @@
+{
+  "ilo_hosts": [
+    {
+      "hostname": "localhost",
+      "username": "",
+      "password": "",
+      "version": "5",
+      "local_mode": true,
+      "tags": {
+        "datacenter": "dc1",
+        "rack": "local",
+        "server_type": "physical_host",
+        "environment": "production",
+        "monitoring_mode": "local"
+      }
+    },
+    {
+      "hostname": "ilo4-server1.example.com",
+      "username": "admin",
+      "password": "your_password_here",
+      "version": "4",
+      "port": 443,
+      "ssl_verify": false,
+      "timeout": 30,
+      "tags": {
+        "datacenter": "dc1",
+        "rack": "A01",
+        "server_type": "DL380",
+        "environment": "production"
+      }
+    },
+    {
+      "hostname": "ilo5-server1.example.com",
+      "username": "monitor",
+      "password": "your_password_here",
+      "version": "5",
+      "port": 443,
+      "ssl_verify": false,
+      "timeout": 30,
+      "tags": {
+        "datacenter": "dc1",
+        "rack": "A02",
+        "server_type": "DL360",
+        "environment": "production"
+      }
+    },
+    {
+      "hostname": "ilo5-server2.example.com",
+      "username": "monitor",
+      "password": "your_password_here",
+      "version": "5",
+      "port": 443,
+      "ssl_verify": false,
+      "timeout": 30,
+      "tags": {
+        "datacenter": "dc2",
+        "rack": "B01",
+        "server_type": "DL385",
+        "environment": "staging"
+      }
+    }
+  ],
+  "monitoring_settings": {
+    "collection_interval": 60,
+    "retry_attempts": 3,
+    "retry_delay": 5,
+    "log_level": "INFO",
+    "enable_ssl_warnings": false,
+    "max_concurrent_requests": 5,
+    "local_mode_tools": ["ipmitool", "hpasmcli", "sensors", "dmidecode", "smartctl"]
+  },
+  "metrics_config": {
+    "collect_system_health": true,
+    "collect_thermal": true,
+    "collect_power": true,
+    "collect_memory": true,
+    "collect_storage": true,
+    "collect_network": false,
+    "temperature_unit": "celsius",
+    "include_thresholds": true,
+    "detailed_fan_metrics": true
+  },
+  "alert_thresholds": {
+    "temperature": {
+      "warning": 75,
+      "critical": 85
+    },
+    "fan_speed": {
+      "warning_min": 10,
+      "critical_min": 5
+    },
+    "power_consumption": {
+      "warning_percent": 80,
+      "critical_percent": 90
+    }
+  },
+  "output_settings": {
+    "format": "telegraf",
+    "include_raw_data": false,
+    "timestamp_precision": "seconds",
+    "field_name_mapping": {
+      "CurrentReading": "current_value",
+      "UpperThresholdCritical": "critical_high",
+      "LowerThresholdCritical": "critical_low"
+    }
+  }
+}

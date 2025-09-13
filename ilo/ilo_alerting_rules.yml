@@ -1,0 +1,224 @@
+# Prometheus Alerting Rules for iLO Hardware Monitoring
+# Save as ilo_alerting_rules.yml and reference in prometheus.yml
+
+groups:
+  - name: ilo_hardware_alerts
+    rules:
+      # System Health Alerts
+      - alert: iLO_SystemHealth_Critical
+        expr: ilo_health_health_code == 3
+        for: 2m
+        labels:
+          severity: critical
+          component: system
+        annotations:
+          summary: "Critical system health issue on {{ $labels.host }}"
+          description: "System health is in critical state on {{ $labels.host }}: {{ $labels.health }}"
+
+      - alert: iLO_SystemHealth_Warning
+        expr: ilo_health_health_code == 2
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "System health warning on {{ $labels.host }}"
+          description: "System health is degraded on {{ $labels.host }}: {{ $labels.health }}"
+
+      # Temperature Alerts
+      - alert: iLO_Temperature_Critical
+        expr: ilo_temperature_value > 85
+        for: 1m
+        labels:
+          severity: critical
+          component: thermal
+        annotations:
+          summary: "Critical temperature on {{ $labels.host }}"
+          description: "Temperature sensor {{ $labels.__name__ }} is at {{ $value }}°C on {{ $labels.host }}"
+
+      - alert: iLO_Temperature_Warning
+        expr: ilo_temperature_value > 75
+        for: 3m
+        labels:
+          severity: warning
+          component: thermal
+        annotations:
+          summary: "High temperature warning on {{ $labels.host }}"
+          description: "Temperature sensor {{ $labels.__name__ }} is at {{ $value }}°C on {{ $labels.host }}"
+
+      - alert: iLO_Temperature_Sensor_Failed
+        expr: ilo_temperature_status_code == 3
+        for: 2m
+        labels:
+          severity: critical
+          component: thermal
+        annotations:
+          summary: "Temperature sensor failure on {{ $labels.host }}"
+          description: "Temperature sensor {{ $labels.__name__ }} has failed on {{ $labels.host }}"
+
+      # Fan Alerts
+      - alert: iLO_Fan_Critical
+        expr: ilo_fan_speed_rpm == 0 and ilo_fan_status_code != 0
+        for: 1m
+        labels:
+          severity: critical
+          component: cooling
+        annotations:
+          summary: "Fan failure on {{ $labels.host }}"
+          description: "Fan {{ $labels.__name__ }} has stopped on {{ $labels.host }}"
+
+      - alert: iLO_Fan_Speed_Low
+        expr: ilo_fan_speed_rpm > 0 and ilo_fan_speed_rpm < 500
+        for: 5m
+        labels:
+          severity: warning
+          component: cooling
+        annotations:
+          summary: "Low fan speed on {{ $labels.host }}"
+          description: "Fan {{ $labels.__name__ }} is running at low speed ({{ $value }} RPM) on {{ $labels.host }}"
+
+      - alert: iLO_Fan_Status_Warning
+        expr: ilo_fan_status_code == 2
+        for: 3m
+        labels:
+          severity: warning
+          component: cooling
+        annotations:
+          summary: "Fan status warning on {{ $labels.host }}"
+          description: "Fan {{ $labels.__name__ }} status is {{ $labels.status }} on {{ $labels.host }}"
+
+      # Power Supply Alerts
+      - alert: iLO_PowerSupply_Failed
+        expr: ilo_power_supply_status_code == 3
+        for: 1m
+        labels:
+          severity: critical
+          component: power
+        annotations:
+          summary: "Power supply failure on {{ $labels.host }}"
+          description: "Power supply {{ $labels.__name__ }} has failed on {{ $labels.host }}"
+
+      - alert: iLO_PowerSupply_Warning
+        expr: ilo_power_supply_status_code == 2
+        for: 3m
+        labels:
+          severity: warning
+          component: power
+        annotations:
+          summary: "Power supply warning on {{ $labels.host }}"
+          description: "Power supply {{ $labels.__name__ }} status is {{ $labels.status }} on {{ $labels.host }}"
+
+      # Power Consumption Alerts
+      - alert: iLO_PowerConsumption_High
+        expr: (ilo_power_consumption_current_watts / ilo_power_consumption_max_watts) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: power
+        annotations:
+          summary: "High power consumption on {{ $labels.host }}"
+          description: "Power consumption is {{ $value | humanizePercentage }} of maximum capacity on {{ $labels.host }}"
+
+      # Memory Alerts
+      - alert: iLO_Memory_Error
+        expr: ilo_memory_status_code == 3
+        for: 1m
+        labels:
+          severity: critical
+          component: memory
+        annotations:
+          summary: "Memory module error on {{ $labels.host }}"
+          description: "Memory module {{ $labels.__name__ }} has errors on {{ $labels.host }}"
+
+      - alert: iLO_Memory_Warning
+        expr: ilo_memory_status_code == 2
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+        annotations:
+          summary: "Memory module warning on {{ $labels.host }}"
+          description: "Memory module {{ $labels.__name__ }} status is {{ $labels.status }} on {{ $labels.host }}"
+
+      # Memory Usage Alerts (for local monitoring)
+      - alert: iLO_Memory_Usage_High
+        expr: ilo_memory_usage_usage_percent > 90
+        for: 10m
+        labels:
+          severity: warning
+          component: memory
+        annotations:
+          summary: "High memory usage on {{ $labels.host }}"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.host }}"
+
+      # Storage Alerts
+      - alert: iLO_Storage_Drive_Failed
+        expr: ilo_drive_status_code == 3
+        for: 1m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Storage drive failure on {{ $labels.host }}"
+          description: "Storage drive {{ $labels.__name__ }} has failed on {{ $labels.host }}"
+
+      # Monitoring Health
+      - alert: iLO_Monitoring_Down
+        expr: up{job="ilo-hardware-monitoring"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: monitoring
+        annotations:
+          summary: "iLO hardware monitoring is down"
+          description: "Cannot scrape iLO hardware metrics from {{ $labels.instance }}"
+
+      - alert: iLO_Monitoring_Stale
+        expr: time() - ilo_health_timestamp > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "iLO monitoring data is stale"
+          description: "Last iLO metrics update was {{ $value | humanizeDuration }} ago on {{ $labels.host }}"
+
+  # Additional rule group for derived metrics
+  - name: ilo_hardware_derived
+    rules:
+      # Overall system health score (0-1, where 1 is healthy)
+      - record: ilo:system_health_score
+        expr: |
+          (
+            (count by (host) (ilo_health_health_code == 1)) +
+            (count by (host) (ilo_temperature_status_code == 1)) +
+            (count by (host) (ilo_fan_status_code == 1)) +
+            (count by (host) (ilo_power_supply_status_code == 1))
+          ) / (
+            (count by (host) (ilo_health_health_code)) +
+            (count by (host) (ilo_temperature_status_code)) +
+            (count by (host) (ilo_fan_status_code)) +
+            (count by (host) (ilo_power_supply_status_code))
+          )
+
+      # Average temperature across all sensors
+      - record: ilo:temperature_average
+        expr: avg by (host) (ilo_temperature_value)
+
+      # Maximum temperature across all sensors
+      - record: ilo:temperature_max
+        expr: max by (host) (ilo_temperature_value)
+
+      # Total power consumption (if multiple supplies)
+      - record: ilo:power_total_consumption
+        expr: sum by (host) (ilo_power_consumption_current_watts)
+
+      # Failed component count
+      - record: ilo:failed_components
+        expr: |
+          (count by (host) (ilo_health_health_code == 3)) +
+          (count by (host) (ilo_temperature_status_code == 3)) +
+          (count by (host) (ilo_fan_status_code == 3)) +
+          (count by (host) (ilo_power_supply_status_code == 3)) +
+          (count by (host) (ilo_memory_status_code == 3)) +
+          (count by (host) (ilo_drive_status_code == 3))

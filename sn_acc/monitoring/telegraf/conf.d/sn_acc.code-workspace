@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		},
+		{
+			"name": "grafana_loki",
+			"path": "../../../../grafana_loki"
+		}
+	],
+	"settings": {}
+}

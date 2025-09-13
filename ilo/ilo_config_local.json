@@ -1,0 +1,30 @@
+{
+  "ilo_hosts": [
+    {
+      "hostname": "localhost",
+      "username": "",
+      "password": "",
+      "version": "5",
+      "local_mode": true,
+      "tags": {
+        "datacenter": "local",
+        "environment": "production",
+        "monitoring_mode": "local_console"
+      }
+    }
+  ],
+  "monitoring_settings": {
+    "collection_interval": 60,
+    "log_level": "INFO",
+    "local_mode_tools": ["ipmitool", "hpasmcli", "sensors", "dmidecode", "smartctl"]
+  },
+  "metrics_config": {
+    "collect_system_health": true,
+    "collect_thermal": true,
+    "collect_power": true,
+    "collect_memory": true,
+    "collect_storage": false,
+    "temperature_unit": "celsius",
+    "include_thresholds": true
+  }
+}

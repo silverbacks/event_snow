@@ -1,0 +1,11 @@
+hostname1
+hostname2
+hostname3
+server01
+server02
+web01
+web02
+db01
+db02
+api01
+api02

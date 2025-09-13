@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Configuration documentation for Grafana Host Connectivity Checker
+# This file is for documentation purposes only - credentials are hardcoded in the script
+
+# HARDCODED CREDENTIALS IN SCRIPT:
+# Dev Environment: dev_admin / dev_password123
+# Prod Environment: prod_admin / prod_password123
+
+# To change credentials, edit check_grafana_hosts.sh directly:
+# readonly DEV_USERNAME="your_dev_username"
+# readonly DEV_PASSWORD="your_dev_password"
+# readonly PROD_USERNAME="your_prod_username"
+# readonly PROD_PASSWORD="your_prod_password"
+
+# Other configuration (not used by current script):
+# Proxy Configuration: webproxy:8080 (hardcoded)
+# Grafana Cloud URLs:
+#   Dev: https://dev.grafana.net
+#   Prod: https://prod.grafana.net
+
+# Default hosts file path
+export GRAFANA_HOSTS_FILE="./sample_hosts.txt"
